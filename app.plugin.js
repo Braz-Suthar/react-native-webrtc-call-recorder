@@ -117,12 +117,9 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
             // Create the file
             val file = File(path)
             file.parentFile?.mkdirs()
-            Log.d("WebrtcCallRecorder", "Creating file at: $path")
-            Log.d("WebrtcCallRecorder", "Parent directory exists: ${file.parentFile?.exists()}")
-            Log.d("WebrtcCallRecorder", "Parent directory writable: ${file.parentFile?.canWrite()}")
+            
             
             fileOutputStream = FileOutputStream(file)
-            Log.d("WebrtcCallRecorder", "File created successfully, size: ${file.length()}")
             
             // Write WAV header
             writeWavHeader(fileOutputStream!!, 44100, 16, 1)
@@ -168,42 +165,33 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
                         }
                     }
                 }
-                Log.d("WebrtcCallRecorder", "Recording thread finished. Total bytes written: $totalBytesWritten")
             }
             recordingThread?.start()
             
-            Log.d("WebrtcCallRecorder", "Recording started: $path")
             promise.resolve(null)
         } catch (e: Exception) {
-            Log.e("WebrtcCallRecorder", "Failed to start recording", e)
             promise.reject("START_RECORDING_ERROR", e.message)
         }
     }
 
     @ReactMethod
     fun stopRecording(promise: Promise) {
-        Log.d("WebrtcCallRecorder", "stopRecording called, isRecording: ${isRecording.get()}")
         if (!isRecording.get()) {
-            Log.d("WebrtcCallRecorder", "No recording in progress, rejecting promise")
             promise.reject("NOT_RECORDING", "No recording in progress")
             return
         }
 
         try {
-            Log.d("WebrtcCallRecorder", "Setting isRecording to false")
             isRecording.set(false)
             
             // Stop recording
-            Log.d("WebrtcCallRecorder", "Stopping AudioRecord")
             audioRecord?.stop()
             audioRecord?.release()
             audioRecord = null
             
             // Wait for recording thread to finish
-            Log.d("WebrtcCallRecorder", "Waiting for recording thread to finish")
             recordingThread?.join()
             recordingThread = null
-            Log.d("WebrtcCallRecorder", "Recording thread finished")
             
             // Close file and update WAV header with actual file size
             fileOutputStream?.close()
@@ -216,11 +204,6 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
                 
                 // Verify file exists and get its size
                 val file = File(path)
-                Log.d("WebrtcCallRecorder", "Recording stopped and saved to: $path")
-                Log.d("WebrtcCallRecorder", "File exists: ${file.exists()}")
-                Log.d("WebrtcCallRecorder", "File size: ${file.length()} bytes")
-                Log.d("WebrtcCallRecorder", "File readable: ${file.canRead()}")
-                Log.d("WebrtcCallRecorder", "File writable: ${file.canWrite()}")
                 
                 promise.resolve(Arguments.createMap().apply {
                     putString("path", path)
@@ -229,7 +212,6 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
                 promise.reject("NO_OUTPUT_PATH", "No output path available")
             }
         } catch (e: Exception) {
-            Log.e("WebrtcCallRecorder", "Failed to stop recording", e)
             promise.reject("STOP_RECORDING_ERROR", e.message)
         }
     }
@@ -241,13 +223,11 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
 
     @ReactMethod
     fun registerAudioTrack(trackId: String, isLocal: Boolean, promise: Promise) {
-        Log.d("WebrtcCallRecorder", "Registering audio track: $trackId, isLocal: $isLocal")
         promise.resolve(null)
     }
 
     @ReactMethod
     fun unregisterAudioTrack(trackId: String, promise: Promise) {
-        Log.d("WebrtcCallRecorder", "Unregistering audio track: $trackId")
         promise.resolve(null)
     }
 
@@ -286,7 +266,6 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
             outputStream.write("data".toByteArray())
             outputStream.write(intToByteArray(0)) // Data size (will be updated later)
         } catch (e: IOException) {
-            Log.e("WebrtcCallRecorder", "Error writing WAV header", e)
         }
     }
     
@@ -310,7 +289,6 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
                 randomAccessFile.close()
             }
         } catch (e: IOException) {
-            Log.e("WebrtcCallRecorder", "Error updating WAV header", e)
         }
     }
     
