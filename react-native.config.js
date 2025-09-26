@@ -3,11 +3,11 @@ module.exports = {
     'react-native-webrtc-call-recorder': {
       platforms: {
         android: {
-          sourceDir: '../android',
+          sourceDir: './android',
           packageImportPath: 'import com.webrtccallrecorder.WebrtcCallRecorderPackage;',
         },
         ios: {
-          podspecPath: '../ios/WebrtcCallRecorder.podspec',
+          podspecPath: './ios/WebrtcCallRecorder.podspec',
         },
       },
     },
