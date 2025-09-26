@@ -59,21 +59,8 @@ const withWebrtcCallRecorder = (config, options = {}) => {
         fs.mkdirSync(targetDir, { recursive: true });
       }
       
-      // Add WebRTC dependency to app/build.gradle if not present
-      const buildGradlePath = path.join(projectRoot, 'app/build.gradle');
-      if (fs.existsSync(buildGradlePath)) {
-        let buildGradle = fs.readFileSync(buildGradlePath, 'utf8');
-        
-        // Add WebRTC dependency if not present
-        if (!buildGradle.includes('org.webrtc:google-webrtc')) {
-          const webrtcDependency = "    implementation 'org.webrtc:google-webrtc:1.0.32006'\n";
-          buildGradle = buildGradle.replace(
-            'dependencies {',
-            `dependencies {\n${webrtcDependency}`
-          );
-          fs.writeFileSync(buildGradlePath, buildGradle);
-        }
-      }
+      // Note: WebRTC dependency should be added by react-native-webrtc package
+      // This plugin only provides the recording functionality
       
       // Create Kotlin files directly
       const kotlinFiles = [
