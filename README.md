@@ -1,6 +1,6 @@
 # react-native-webrtc-call-recorder
 
-[ Not Stable, still in development ]
+### [ Not Stable, still in development ]
 
 A React Native package for recording WebRTC calls locally on device. Supports both React Native (bare workflow) and Expo apps using prebuild.
 
@@ -302,6 +302,6 @@ See [CHANGELOG.md](CHANGELOG.md) for a list of changes.
 
 ## Support
 
-- 📧 Email: support@example.com
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/react-native-webrtc-call-recorder/issues)
-- 📖 Documentation: [GitHub Wiki](https://github.com/yourusername/react-native-webrtc-call-recorder/wiki)
+- 📧 Email: me@brazsuthar.in
+- 🐛 Issues: [GitHub Issues](https://github.com/Braz-Suthar/react-native-webrtc-call-recorder/issues)
+- 📖 Documentation: [GitHub Wiki](https://github.com/Braz-Suthar/react-native-webrtc-call-recorder/wiki)
