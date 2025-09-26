@@ -1,4 +1,4 @@
-const { withAndroidManifest, withInfoPlist, withDangerousMod } = require('@expo/config-plugins');
+const { withAndroidManifest, withInfoPlist, withDangerousMod, withSettingsGradle } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
@@ -363,6 +363,31 @@ RCT_EXPORT_METHOD(unregisterAudioTrack:(NSString *)trackId
       });
       
       console.log(`✅ WebrtcCallRecorder iOS files created in ${targetDir}`);
+      return config;
+    },
+  ]);
+  
+  // Add the module to Expo's autolinking configuration
+  config = withDangerousMod(config, [
+    'android',
+    async (config) => {
+      const projectRoot = config.modRequest.platformProjectRoot;
+      
+      // Create expo-module.config.json in the project root
+      const expoModuleConfig = {
+        "platforms": ["ios", "android"],
+        "ios": {
+          "modules": ["WebrtcCallRecorder"]
+        },
+        "android": {
+          "modules": ["com.webrtccallrecorder.WebrtcCallRecorderModule"]
+        }
+      };
+      
+      const configPath = path.join(projectRoot, 'expo-module.config.json');
+      fs.writeFileSync(configPath, JSON.stringify(expoModuleConfig, null, 2));
+      console.log('✅ Created expo-module.config.json for autolinking');
+      
       return config;
     },
   ]);
