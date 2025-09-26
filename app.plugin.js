@@ -57,6 +57,17 @@ const withWebrtcCallRecorder = (config, options = {}) => {
         fs.mkdirSync(targetDir, { recursive: true });
       }
       
+      // Also create the module in node_modules for auto-linking
+      const moduleDir = path.join(projectRoot, 'node_modules/react-native-webrtc-call-recorder/android');
+      if (!fs.existsSync(moduleDir)) {
+        fs.mkdirSync(moduleDir, { recursive: true });
+      }
+      
+      const moduleSourceDir = path.join(moduleDir, 'src/main/java/com/webrtccallrecorder');
+      if (!fs.existsSync(moduleSourceDir)) {
+        fs.mkdirSync(moduleSourceDir, { recursive: true });
+      }
+      
       // Create simplified Kotlin files that work with auto-linking
       const kotlinFiles = [
         {
@@ -180,10 +191,59 @@ class WebrtcCallRecorderPackage : ReactPackage {
       ];
       
       kotlinFiles.forEach(file => {
+        // Create in project directory
         const targetFile = path.join(targetDir, file.name);
         fs.writeFileSync(targetFile, file.content);
         console.log(`✅ Created ${file.name} at ${targetFile}`);
+        
+        // Also create in node_modules for auto-linking
+        const moduleFile = path.join(moduleSourceDir, file.name);
+        fs.writeFileSync(moduleFile, file.content);
+        console.log(`✅ Created ${file.name} in node_modules for auto-linking`);
       });
+      
+      // Create build.gradle for the module
+      const buildGradleContent = `apply plugin: 'com.android.library'
+
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+android {
+    compileSdkVersion safeExtGet('compileSdkVersion', 33)
+    buildToolsVersion safeExtGet('buildToolsVersion', '33.0.0')
+
+    defaultConfig {
+        minSdkVersion safeExtGet('minSdkVersion', 21)
+        targetSdkVersion safeExtGet('targetSdkVersion', 33)
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation 'com.facebook.react:react-native:+'
+}
+
+repositories {
+    google()
+    mavenCentral()
+}`;
+      
+      fs.writeFileSync(path.join(moduleDir, 'build.gradle'), buildGradleContent);
+      console.log(`✅ Created build.gradle for auto-linking`);
       
       console.log(`✅ WebrtcCallRecorder native files created in ${targetDir}`);
       return config;
