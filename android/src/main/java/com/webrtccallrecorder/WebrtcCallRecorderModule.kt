@@ -1,48 +1,26 @@
 package com.webrtccallrecorder
 
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.os.Environment
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.*
-import org.webrtc.*
-import java.io.*
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
-import kotlinx.coroutines.*
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
     
-    companion object {
-        private const val TAG = "WebrtcCallRecorder"
-        private const val SAMPLE_RATE = 48000
-        private const val CHANNELS = 1
-        private const val BITS_PER_SAMPLE = 16
-    }
-
     private val isRecording = AtomicBoolean(false)
     private val outputPath = AtomicReference<String?>(null)
-    private val audioTracks = ConcurrentHashMap<String, AudioTrackInfo>()
-    private val recordingJob = AtomicReference<Job?>(null)
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var mediaRecorder: MediaRecorder? = null
-    
-    private data class AudioTrackInfo(
-        val track: AudioTrack,
-        val isLocal: Boolean,
-        val sink: AudioSink
-    )
+    private var audioRecord: AudioRecord? = null
+    private var recordingThread: Thread? = null
+    private var fileOutputStream: FileOutputStream? = null
 
     override fun getName(): String = "WebrtcCallRecorder"
 
@@ -60,78 +38,124 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
 
         try {
             val path = options.getString("path") ?: getDefaultOutputPath()
-            val mix = options.getBoolean("mix")
-            val format = options.getString("format") ?: "wav"
-            
-            Log.d(TAG, "Starting recording with options:")
-            Log.d(TAG, "  Path: $path")
-            Log.d(TAG, "  Mix: $mix")
-            Log.d(TAG, "  Format: $format")
-            
             outputPath.set(path)
-            isRecording.set(true)
             
-            // Start recording coroutine
-            val job = scope.launch {
-                startAudioRecording(path, mix, format)
+            // Create the file
+            val file = File(path)
+            file.parentFile?.mkdirs()
+            Log.d("WebrtcCallRecorder", "Creating file at: $path")
+            Log.d("WebrtcCallRecorder", "Parent directory exists: ${file.parentFile?.exists()}")
+            Log.d("WebrtcCallRecorder", "Parent directory writable: ${file.parentFile?.canWrite()}")
+            
+            fileOutputStream = FileOutputStream(file)
+            Log.d("WebrtcCallRecorder", "File created successfully, size: ${file.length()}")
+            
+            // Write WAV header
+            writeWavHeader(fileOutputStream!!, 44100, 16, 1)
+            
+            // Initialize AudioRecord
+            val bufferSize = AudioRecord.getMinBufferSize(
+                44100,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                44100,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+            
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                promise.reject("AUDIO_INIT_ERROR", "Failed to initialize AudioRecord")
+                return
             }
-            recordingJob.set(job)
             
-            Log.d(TAG, "Recording started successfully")
+            isRecording.set(true)
+            audioRecord?.startRecording()
+            
+            // Start recording thread
+            recordingThread = Thread {
+                val buffer = ByteArray(bufferSize)
+                var totalBytesWritten = 0
+                while (isRecording.get()) {
+                    val bytesRead = audioRecord?.read(buffer, 0, bufferSize) ?: 0
+                    if (bytesRead > 0) {
+                        try {
+                            fileOutputStream?.write(buffer, 0, bytesRead)
+                            totalBytesWritten += bytesRead
+                            if (totalBytesWritten % (44100 * 2) == 0) { // Log every second
+                                Log.d("WebrtcCallRecorder", "Written $totalBytesWritten bytes to file")
+                            }
+                        } catch (e: IOException) {
+                            Log.e("WebrtcCallRecorder", "Error writing audio data", e)
+                        }
+                    }
+                }
+                Log.d("WebrtcCallRecorder", "Recording thread finished. Total bytes written: $totalBytesWritten")
+            }
+            recordingThread?.start()
+            
+            Log.d("WebrtcCallRecorder", "Recording started: $path")
             promise.resolve(null)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start recording", e)
+            Log.e("WebrtcCallRecorder", "Failed to start recording", e)
             promise.reject("START_RECORDING_ERROR", e.message)
         }
     }
 
     @ReactMethod
     fun stopRecording(promise: Promise) {
+        Log.d("WebrtcCallRecorder", "stopRecording called, isRecording: ${isRecording.get()}")
         if (!isRecording.get()) {
+            Log.d("WebrtcCallRecorder", "No recording in progress, rejecting promise")
             promise.reject("NOT_RECORDING", "No recording in progress")
             return
         }
 
         try {
-            Log.d(TAG, "Stopping recording...")
+            Log.d("WebrtcCallRecorder", "Setting isRecording to false")
             isRecording.set(false)
             
-            // Stop the MediaRecorder
-            stopMediaRecorder()
+            // Stop recording
+            Log.d("WebrtcCallRecorder", "Stopping AudioRecord")
+            audioRecord?.stop()
+            audioRecord?.release()
+            audioRecord = null
             
-            // Cancel the recording job
-            recordingJob.get()?.cancel()
-            recordingJob.set(null)
+            // Wait for recording thread to finish
+            Log.d("WebrtcCallRecorder", "Waiting for recording thread to finish")
+            recordingThread?.join()
+            recordingThread = null
+            Log.d("WebrtcCallRecorder", "Recording thread finished")
+            
+            // Close file and update WAV header with actual file size
+            fileOutputStream?.close()
+            fileOutputStream = null
             
             val path = outputPath.get()
             if (path != null) {
-                Log.d(TAG, "Checking for recording file at: $path")
+                // Update WAV header with correct file size
+                updateWavHeader(path)
                 
-                // Wait a moment for the file to be written
-                Thread.sleep(500)
-                
-                // Verify the file was created
+                // Verify file exists and get its size
                 val file = File(path)
-                Log.d(TAG, "File exists: ${file.exists()}")
-                Log.d(TAG, "File size: ${file.length()} bytes")
-                Log.d(TAG, "File absolute path: ${file.absolutePath}")
+                Log.d("WebrtcCallRecorder", "Recording stopped and saved to: $path")
+                Log.d("WebrtcCallRecorder", "File exists: ${file.exists()}")
+                Log.d("WebrtcCallRecorder", "File size: ${file.length()} bytes")
+                Log.d("WebrtcCallRecorder", "File readable: ${file.canRead()}")
+                Log.d("WebrtcCallRecorder", "File writable: ${file.canWrite()}")
                 
-                if (file.exists() && file.length() > 0) {
-                    Log.d(TAG, "Recording saved successfully: $path (${file.length()} bytes)")
-                    promise.resolve(Arguments.createMap().apply {
-                        putString("path", path)
-                        putDouble("size", file.length().toDouble())
-                    })
-                } else {
-                    Log.e(TAG, "Recording file was not created or is empty: $path")
-                    Log.e(TAG, "File exists: ${file.exists()}, File size: ${file.length()}")
-                    promise.reject("FILE_NOT_CREATED", "Recording file was not created or is empty")
-                }
+                promise.resolve(Arguments.createMap().apply {
+                    putString("path", path)
+                })
             } else {
                 promise.reject("NO_OUTPUT_PATH", "No output path available")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to stop recording", e)
+            Log.e("WebrtcCallRecorder", "Failed to stop recording", e)
             promise.reject("STOP_RECORDING_ERROR", e.message)
         }
     }
@@ -142,45 +166,15 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
     }
 
     @ReactMethod
-    fun requestPermissions(promise: Promise) {
-        val context = reactApplicationContext
-        val hasPermission = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-        
-        if (hasPermission) {
-            promise.resolve(true)
-        } else {
-            // Note: In a real app, you would typically use ActivityCompat.requestPermissions
-            // For a React Native module, permissions should be requested from the React Native side
-            promise.resolve(false)
-        }
-    }
-
-    @ReactMethod
     fun registerAudioTrack(trackId: String, isLocal: Boolean, promise: Promise) {
-        try {
-            // This would need to be called with actual WebRTC AudioTrack instances
-            // For now, we'll create a placeholder that can be extended
-            Log.d(TAG, "Registering audio track: $trackId, isLocal: $isLocal")
-            promise.resolve(null)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to register audio track", e)
-            promise.reject("REGISTER_TRACK_ERROR", e.message)
-        }
+        Log.d("WebrtcCallRecorder", "Registering audio track: $trackId, isLocal: $isLocal")
+        promise.resolve(null)
     }
 
     @ReactMethod
     fun unregisterAudioTrack(trackId: String, promise: Promise) {
-        try {
-            audioTracks.remove(trackId)
-            Log.d(TAG, "Unregistered audio track: $trackId")
-            promise.resolve(null)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to unregister audio track", e)
-            promise.reject("UNREGISTER_TRACK_ERROR", e.message)
-        }
+        Log.d("WebrtcCallRecorder", "Unregistering audio track: $trackId")
+        promise.resolve(null)
     }
 
     private fun checkPermissions(): Boolean {
@@ -194,131 +188,71 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
     private fun getDefaultOutputPath(): String {
         val context = reactApplicationContext
         val timestamp = System.currentTimeMillis()
-        val fileName = "webrtc_recording_$timestamp.m4a"
-        
-        // Create the files directory if it doesn't exist
-        val filesDir = context.filesDir
-        if (!filesDir.exists()) {
-            filesDir.mkdirs()
-        }
-        
-        return File(filesDir, fileName).absolutePath
+        val fileName = "webrtc_recording_$timestamp.wav"
+        return context.filesDir.absolutePath + "/" + fileName
     }
-
-    private suspend fun startAudioRecording(path: String, mix: Boolean, format: String) {
+    
+    private fun writeWavHeader(outputStream: FileOutputStream, sampleRate: Int, bitsPerSample: Int, channels: Int) {
         try {
-            // Both WAV and AAC requests will use the same MP4/AAC implementation
-            // since MediaRecorder doesn't support raw WAV output directly
-            when (format) {
-                "wav", "aac" -> recordAudioFile(path, mix, format)
-                else -> throw IllegalArgumentException("Unsupported format: $format")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Audio recording failed", e)
-            isRecording.set(false)
-        }
-    }
-
-    private suspend fun recordAudioFile(path: String, mix: Boolean, format: String) {
-        try {
-            // Ensure the directory exists
-            val file = File(path)
-            file.parentFile?.mkdirs()
+            val byteRate = sampleRate * channels * bitsPerSample / 8
+            val blockAlign = channels * bitsPerSample / 8
             
-            Log.d(TAG, "Starting $format recording to: $path")
-            Log.d(TAG, "File parent directory exists: ${file.parentFile?.exists()}")
-            Log.d(TAG, "File parent directory: ${file.parentFile?.absolutePath}")
-            
-            // Use MediaRecorder with MP4 format and AAC encoder for both WAV and AAC requests
-            // This is the most reliable approach on Android
-            mediaRecorder = MediaRecorder().apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioSamplingRate(44100)
-                setAudioChannels(1)
-                setAudioEncodingBitRate(128000)
-                setOutputFile(path)
-                
-                try {
-                    prepare()
-                    start()
-                    Log.d(TAG, "MediaRecorder started $format recording to: $path")
-                } catch (e: IOException) {
-                    Log.e(TAG, "MediaRecorder prepare/start failed", e)
-                    throw e
-                }
-            }
-            
-            // Keep recording while isRecording is true
-            while (isRecording.get()) {
-                delay(100) // Check every 100ms
-            }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "$format recording failed", e)
-            throw e
-        } finally {
-            stopMediaRecorder()
+            // WAV header (44 bytes)
+            outputStream.write("RIFF".toByteArray())
+            outputStream.write(intToByteArray(0)) // File size (will be updated later)
+            outputStream.write("WAVE".toByteArray())
+            outputStream.write("fmt ".toByteArray())
+            outputStream.write(intToByteArray(16)) // Format chunk size
+            outputStream.write(shortToByteArray(1)) // Audio format (PCM)
+            outputStream.write(shortToByteArray(channels.toShort())) // Number of channels
+            outputStream.write(intToByteArray(sampleRate)) // Sample rate
+            outputStream.write(intToByteArray(byteRate)) // Byte rate
+            outputStream.write(shortToByteArray(blockAlign.toShort())) // Block align
+            outputStream.write(shortToByteArray(bitsPerSample.toShort())) // Bits per sample
+            outputStream.write("data".toByteArray())
+            outputStream.write(intToByteArray(0)) // Data size (will be updated later)
+        } catch (e: IOException) {
+            Log.e("WebrtcCallRecorder", "Error writing WAV header", e)
         }
     }
     
-    private fun stopMediaRecorder() {
+    private fun updateWavHeader(filePath: String) {
         try {
-            mediaRecorder?.apply {
-                Log.d(TAG, "Stopping MediaRecorder...")
-                if (isRecording.get()) {
-                    stop()
-                    Log.d(TAG, "MediaRecorder stopped successfully")
-                }
-                release()
-                Log.d(TAG, "MediaRecorder released")
+            val file = File(filePath)
+            if (file.exists() && file.length() > 44) {
+                val fileSize = file.length().toInt()
+                val dataSize = fileSize - 44
+                
+                val randomAccessFile = java.io.RandomAccessFile(file, "rw")
+                
+                // Update file size in RIFF header
+                randomAccessFile.seek(4)
+                randomAccessFile.write(intToByteArray(fileSize - 8))
+                
+                // Update data size
+                randomAccessFile.seek(40)
+                randomAccessFile.write(intToByteArray(dataSize))
+                
+                randomAccessFile.close()
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping MediaRecorder", e)
-        } finally {
-            mediaRecorder = null
+        } catch (e: IOException) {
+            Log.e("WebrtcCallRecorder", "Error updating WAV header", e)
         }
     }
-
-    private fun writeWavHeader(outputStream: FileOutputStream, sampleRate: Int, channels: Int, bitsPerSample: Int) {
-        val byteRate = sampleRate * channels * bitsPerSample / 8
-        val blockAlign = channels * bitsPerSample / 8
-        
-        // WAV header (44 bytes)
-        outputStream.write("RIFF".toByteArray())
-        outputStream.write(intToLittleEndian(36)) // File size - 8 (will be updated later)
-        outputStream.write("WAVE".toByteArray())
-        outputStream.write("fmt ".toByteArray())
-        outputStream.write(intToLittleEndian(16)) // Format chunk size
-        outputStream.write(shortToLittleEndian(1)) // Audio format (PCM)
-        outputStream.write(shortToLittleEndian(channels))
-        outputStream.write(intToLittleEndian(sampleRate))
-        outputStream.write(intToLittleEndian(byteRate))
-        outputStream.write(shortToLittleEndian(blockAlign))
-        outputStream.write(shortToLittleEndian(bitsPerSample))
-        outputStream.write("data".toByteArray())
-        outputStream.write(intToLittleEndian(0)) // Data size (will be updated later)
+    
+    private fun intToByteArray(value: Int): ByteArray {
+        return byteArrayOf(
+            (value and 0xFF).toByte(),
+            ((value shr 8) and 0xFF).toByte(),
+            ((value shr 16) and 0xFF).toByte(),
+            ((value shr 24) and 0xFF).toByte()
+        )
     }
-
-    private fun intToLittleEndian(value: Int): ByteArray {
-        return ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
-    }
-
-    private fun shortToLittleEndian(value: Int): ByteArray {
-        return ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(value.toShort()).array()
-    }
-
-    override fun onCatalystInstanceDestroy() {
-        super.onCatalystInstanceDestroy()
-        
-        // Stop any ongoing recording
-        if (isRecording.get()) {
-            isRecording.set(false)
-            stopMediaRecorder()
-        }
-        
-        // Cancel all coroutines
-        scope.cancel()
+    
+    private fun shortToByteArray(value: Short): ByteArray {
+        return byteArrayOf(
+            (value.toInt() and 0xFF).toByte(),
+            ((value.toInt() shr 8) and 0xFF).toByte()
+        )
     }
 }
