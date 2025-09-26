@@ -303,22 +303,33 @@ class WebrtcCallRecorderPackage : ReactPackage {
       kotlinFiles.forEach(file => {
         const targetFile = path.join(targetDir, file.name);
         fs.writeFileSync(targetFile, file.content);
+        console.log(`✅ Created ${file.name} at ${targetFile}`);
       });
       
+      console.log(`✅ WebrtcCallRecorder native files created in ${targetDir}`);
       return config;
     },
   ]);
 
   // Register the package in MainApplication
   config = withMainApplication(config, (config) => {
-    const mainApplicationPath = path.join(
-      config.modRequest.platformProjectRoot,
-      'app/src/main/java',
-      androidPackageName.replace(/\./g, '/'),
-      'MainApplication.java'
-    );
+    // Find the actual MainApplication.java file
+    const projectRoot = config.modRequest.platformProjectRoot;
+    const possiblePaths = [
+      path.join(projectRoot, 'app/src/main/java', androidPackageName.replace(/\./g, '/'), 'MainApplication.java'),
+      path.join(projectRoot, 'app/src/main/java/com/mizcallrn/MainApplication.java'),
+      path.join(projectRoot, 'app/src/main/java/com/yourapp/MainApplication.java')
+    ];
     
-    if (fs.existsSync(mainApplicationPath)) {
+    let mainApplicationPath = null;
+    for (const possiblePath of possiblePaths) {
+      if (fs.existsSync(possiblePath)) {
+        mainApplicationPath = possiblePath;
+        break;
+      }
+    }
+    
+    if (mainApplicationPath) {
       let mainApplication = fs.readFileSync(mainApplicationPath, 'utf8');
       
       // Add import
@@ -339,6 +350,9 @@ class WebrtcCallRecorderPackage : ReactPackage {
       }
       
       fs.writeFileSync(mainApplicationPath, mainApplication);
+      console.log('✅ WebrtcCallRecorderPackage registered in MainApplication.java');
+    } else {
+      console.warn('⚠️ MainApplication.java not found. Please manually add WebrtcCallRecorderPackage to your MainApplication.java');
     }
     
     return config;
@@ -462,8 +476,10 @@ RCT_EXPORT_METHOD(unregisterAudioTrack:(NSString *)trackId
       iosFiles.forEach(file => {
         const targetFile = path.join(targetDir, file.name);
         fs.writeFileSync(targetFile, file.content);
+        console.log(`✅ Created ${file.name} at ${targetFile}`);
       });
       
+      console.log(`✅ WebrtcCallRecorder iOS files created in ${targetDir}`);
       return config;
     },
   ]);
