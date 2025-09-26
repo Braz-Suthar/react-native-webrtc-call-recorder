@@ -63,6 +63,11 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
             val mix = options.getBoolean("mix")
             val format = options.getString("format") ?: "wav"
             
+            Log.d(TAG, "Starting recording with options:")
+            Log.d(TAG, "  Path: $path")
+            Log.d(TAG, "  Mix: $mix")
+            Log.d(TAG, "  Format: $format")
+            
             outputPath.set(path)
             isRecording.set(true)
             
@@ -72,6 +77,7 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
             }
             recordingJob.set(job)
             
+            Log.d(TAG, "Recording started successfully")
             promise.resolve(null)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start recording", e)
@@ -87,6 +93,7 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
         }
 
         try {
+            Log.d(TAG, "Stopping recording...")
             isRecording.set(false)
             
             // Stop the MediaRecorder
@@ -98,8 +105,17 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
             
             val path = outputPath.get()
             if (path != null) {
+                Log.d(TAG, "Checking for recording file at: $path")
+                
+                // Wait a moment for the file to be written
+                Thread.sleep(500)
+                
                 // Verify the file was created
                 val file = File(path)
+                Log.d(TAG, "File exists: ${file.exists()}")
+                Log.d(TAG, "File size: ${file.length()} bytes")
+                Log.d(TAG, "File absolute path: ${file.absolutePath}")
+                
                 if (file.exists() && file.length() > 0) {
                     Log.d(TAG, "Recording saved successfully: $path (${file.length()} bytes)")
                     promise.resolve(Arguments.createMap().apply {
@@ -108,6 +124,7 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
                     })
                 } else {
                     Log.e(TAG, "Recording file was not created or is empty: $path")
+                    Log.e(TAG, "File exists: ${file.exists()}, File size: ${file.length()}")
                     promise.reject("FILE_NOT_CREATED", "Recording file was not created or is empty")
                 }
             } else {
@@ -177,7 +194,7 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
     private fun getDefaultOutputPath(): String {
         val context = reactApplicationContext
         val timestamp = System.currentTimeMillis()
-        val fileName = "webrtc_recording_$timestamp.wav"
+        val fileName = "webrtc_recording_$timestamp.m4a"
         
         // Create the files directory if it doesn't exist
         val filesDir = context.filesDir
@@ -190,9 +207,10 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
 
     private suspend fun startAudioRecording(path: String, mix: Boolean, format: String) {
         try {
+            // Both WAV and AAC requests will use the same MP4/AAC implementation
+            // since MediaRecorder doesn't support raw WAV output directly
             when (format) {
-                "wav" -> recordWavFile(path, mix)
-                "aac" -> recordAacFile(path, mix)
+                "wav", "aac" -> recordAudioFile(path, mix, format)
                 else -> throw IllegalArgumentException("Unsupported format: $format")
             }
         } catch (e: Exception) {
@@ -201,69 +219,31 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
         }
     }
 
-    private suspend fun recordWavFile(path: String, mix: Boolean) {
+    private suspend fun recordAudioFile(path: String, mix: Boolean, format: String) {
         try {
             // Ensure the directory exists
             val file = File(path)
             file.parentFile?.mkdirs()
             
-            // For WAV files, we'll use MediaRecorder with WAV format if available,
-            // otherwise fall back to MP4 and convert
-            mediaRecorder = MediaRecorder().apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                
-                // Try to use WAV format if supported, otherwise use MP4
-                try {
-                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                } catch (e: Exception) {
-                    Log.w(TAG, "WAV format not supported, using MP4", e)
-                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                }
-                
-                setOutputFile(path)
-                
-                try {
-                    prepare()
-                    start()
-                    Log.d(TAG, "MediaRecorder started WAV recording to: $path")
-                } catch (e: IOException) {
-                    Log.e(TAG, "MediaRecorder prepare/start failed", e)
-                    throw e
-                }
-            }
+            Log.d(TAG, "Starting $format recording to: $path")
+            Log.d(TAG, "File parent directory exists: ${file.parentFile?.exists()}")
+            Log.d(TAG, "File parent directory: ${file.parentFile?.absolutePath}")
             
-            // Keep recording while isRecording is true
-            while (isRecording.get()) {
-                delay(100) // Check every 100ms
-            }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "WAV recording failed", e)
-            throw e
-        } finally {
-            stopMediaRecorder()
-        }
-    }
-
-    private suspend fun recordAacFile(path: String, mix: Boolean) {
-        try {
-            // Ensure the directory exists
-            val file = File(path)
-            file.parentFile?.mkdirs()
-            
-            // Initialize MediaRecorder for AAC
+            // Use MediaRecorder with MP4 format and AAC encoder for both WAV and AAC requests
+            // This is the most reliable approach on Android
             mediaRecorder = MediaRecorder().apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioSamplingRate(44100)
+                setAudioChannels(1)
+                setAudioEncodingBitRate(128000)
                 setOutputFile(path)
                 
                 try {
                     prepare()
                     start()
-                    Log.d(TAG, "MediaRecorder started AAC recording to: $path")
+                    Log.d(TAG, "MediaRecorder started $format recording to: $path")
                 } catch (e: IOException) {
                     Log.e(TAG, "MediaRecorder prepare/start failed", e)
                     throw e
@@ -276,7 +256,7 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
             }
             
         } catch (e: Exception) {
-            Log.e(TAG, "AAC recording failed", e)
+            Log.e(TAG, "$format recording failed", e)
             throw e
         } finally {
             stopMediaRecorder()
@@ -286,11 +266,13 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
     private fun stopMediaRecorder() {
         try {
             mediaRecorder?.apply {
+                Log.d(TAG, "Stopping MediaRecorder...")
                 if (isRecording.get()) {
                     stop()
-                    Log.d(TAG, "MediaRecorder stopped")
+                    Log.d(TAG, "MediaRecorder stopped successfully")
                 }
                 release()
+                Log.d(TAG, "MediaRecorder released")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping MediaRecorder", e)
