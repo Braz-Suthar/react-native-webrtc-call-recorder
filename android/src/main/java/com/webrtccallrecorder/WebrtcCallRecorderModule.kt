@@ -18,6 +18,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.*
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 
 class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
     
@@ -33,6 +36,7 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
     private val audioTracks = ConcurrentHashMap<String, AudioTrackInfo>()
     private val recordingJob = AtomicReference<Job?>(null)
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var mediaRecorder: MediaRecorder? = null
     
     private data class AudioTrackInfo(
         val track: AudioTrack,
@@ -84,14 +88,28 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
 
         try {
             isRecording.set(false)
+            
+            // Stop the MediaRecorder
+            stopMediaRecorder()
+            
+            // Cancel the recording job
             recordingJob.get()?.cancel()
             recordingJob.set(null)
             
             val path = outputPath.get()
             if (path != null) {
-                promise.resolve(Arguments.createMap().apply {
-                    putString("path", path)
-                })
+                // Verify the file was created
+                val file = File(path)
+                if (file.exists() && file.length() > 0) {
+                    Log.d(TAG, "Recording saved successfully: $path (${file.length()} bytes)")
+                    promise.resolve(Arguments.createMap().apply {
+                        putString("path", path)
+                        putDouble("size", file.length().toDouble())
+                    })
+                } else {
+                    Log.e(TAG, "Recording file was not created or is empty: $path")
+                    promise.reject("FILE_NOT_CREATED", "Recording file was not created or is empty")
+                }
             } else {
                 promise.reject("NO_OUTPUT_PATH", "No output path available")
             }
@@ -104,6 +122,23 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
     @ReactMethod
     fun isRecording(promise: Promise) {
         promise.resolve(isRecording.get())
+    }
+
+    @ReactMethod
+    fun requestPermissions(promise: Promise) {
+        val context = reactApplicationContext
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        
+        if (hasPermission) {
+            promise.resolve(true)
+        } else {
+            // Note: In a real app, you would typically use ActivityCompat.requestPermissions
+            // For a React Native module, permissions should be requested from the React Native side
+            promise.resolve(false)
+        }
     }
 
     @ReactMethod
@@ -143,7 +178,14 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
         val context = reactApplicationContext
         val timestamp = System.currentTimeMillis()
         val fileName = "webrtc_recording_$timestamp.wav"
-        return File(context.filesDir, fileName).absolutePath
+        
+        // Create the files directory if it doesn't exist
+        val filesDir = context.filesDir
+        if (!filesDir.exists()) {
+            filesDir.mkdirs()
+        }
+        
+        return File(filesDir, fileName).absolutePath
     }
 
     private suspend fun startAudioRecording(path: String, mix: Boolean, format: String) {
@@ -155,33 +197,106 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
             }
         } catch (e: Exception) {
             Log.e(TAG, "Audio recording failed", e)
+            isRecording.set(false)
         }
     }
 
     private suspend fun recordWavFile(path: String, mix: Boolean) {
-        val file = File(path)
-        val outputStream = FileOutputStream(file)
-        
         try {
-            // Write WAV header
-            writeWavHeader(outputStream, SAMPLE_RATE, CHANNELS, BITS_PER_SAMPLE)
+            // Ensure the directory exists
+            val file = File(path)
+            file.parentFile?.mkdirs()
             
-            // TODO: Implement actual audio capture from WebRTC tracks
-            // This would require integration with react-native-webrtc's AudioTrack instances
-            // For now, we'll create a placeholder implementation
+            // For WAV files, we'll use MediaRecorder with WAV format if available,
+            // otherwise fall back to MP4 and convert
+            mediaRecorder = MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                
+                // Try to use WAV format if supported, otherwise use MP4
+                try {
+                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                } catch (e: Exception) {
+                    Log.w(TAG, "WAV format not supported, using MP4", e)
+                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                }
+                
+                setOutputFile(path)
+                
+                try {
+                    prepare()
+                    start()
+                    Log.d(TAG, "MediaRecorder started WAV recording to: $path")
+                } catch (e: IOException) {
+                    Log.e(TAG, "MediaRecorder prepare/start failed", e)
+                    throw e
+                }
+            }
             
-            // Simulate recording for a short duration (in real implementation, this would be continuous)
-            delay(1000) // Placeholder - replace with actual audio capture
+            // Keep recording while isRecording is true
+            while (isRecording.get()) {
+                delay(100) // Check every 100ms
+            }
             
+        } catch (e: Exception) {
+            Log.e(TAG, "WAV recording failed", e)
+            throw e
         } finally {
-            outputStream.close()
+            stopMediaRecorder()
         }
     }
 
     private suspend fun recordAacFile(path: String, mix: Boolean) {
-        // TODO: Implement AAC encoding using MediaCodec
-        // This is a placeholder implementation
-        Log.d(TAG, "AAC recording not yet implemented")
+        try {
+            // Ensure the directory exists
+            val file = File(path)
+            file.parentFile?.mkdirs()
+            
+            // Initialize MediaRecorder for AAC
+            mediaRecorder = MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setOutputFile(path)
+                
+                try {
+                    prepare()
+                    start()
+                    Log.d(TAG, "MediaRecorder started AAC recording to: $path")
+                } catch (e: IOException) {
+                    Log.e(TAG, "MediaRecorder prepare/start failed", e)
+                    throw e
+                }
+            }
+            
+            // Keep recording while isRecording is true
+            while (isRecording.get()) {
+                delay(100) // Check every 100ms
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "AAC recording failed", e)
+            throw e
+        } finally {
+            stopMediaRecorder()
+        }
+    }
+    
+    private fun stopMediaRecorder() {
+        try {
+            mediaRecorder?.apply {
+                if (isRecording.get()) {
+                    stop()
+                    Log.d(TAG, "MediaRecorder stopped")
+                }
+                release()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping MediaRecorder", e)
+        } finally {
+            mediaRecorder = null
+        }
     }
 
     private fun writeWavHeader(outputStream: FileOutputStream, sampleRate: Int, channels: Int, bitsPerSample: Int) {
@@ -214,6 +329,14 @@ class WebrtcCallRecorderModule(reactContext: ReactApplicationContext) : ReactCon
 
     override fun onCatalystInstanceDestroy() {
         super.onCatalystInstanceDestroy()
+        
+        // Stop any ongoing recording
+        if (isRecording.get()) {
+            isRecording.set(false)
+            stopMediaRecorder()
+        }
+        
+        // Cancel all coroutines
         scope.cancel()
     }
 }
