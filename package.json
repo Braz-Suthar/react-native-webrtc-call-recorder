@@ -1,0 +1,61 @@
+{
+  "name": "react-native-webrtc-call-recorder",
+  "version": "1.0.3",
+  "description": "Record WebRTC calls locally on device with support for React Native and Expo",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build && npm run lint",
+    "lint": "eslint src/**/*.ts",
+    "test": "npm run build && npm run lint",
+    "clean": "rm -rf lib"
+  },
+  "keywords": [
+    "react-native",
+    "webrtc",
+    "recording",
+    "audio",
+    "expo",
+    "native-module"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/react-native-webrtc-call-recorder.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/react-native-webrtc-call-recorder/issues"
+  },
+  "homepage": "https://github.com/yourusername/react-native-webrtc-call-recorder#readme",
+  "peerDependencies": {
+    "react": ">=16.8.0",
+    "react-native": ">=0.60.0",
+    "react-native-webrtc": ">=100.0.0"
+  },
+  "dependencies": {
+    "@expo/config-plugins": "^8.0.0",
+    "@expo/config-types": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "@types/react-native": "^0.72.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0",
+    "react": "^18.0.0",
+    "react-native": "^0.72.0"
+  },
+  "files": [
+    "lib",
+    "android",
+    "ios",
+    "plugin",
+    "app.plugin.js",
+    "README.md",
+    "LICENSE",
+    "react-native.config.js"
+  ]
+}
